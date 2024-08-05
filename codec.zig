@@ -14,15 +14,16 @@ pub fn init(allocator: std.mem.Allocator) !Self {
     var tree = try Node.init(allocator);
     for (hcodes, lens, 0..) |code, len, sym|
         try tree.insert(code, @truncate(sym), @intCast(len));
-    return Self{.tree = tree};
+    return Self{ .tree = tree };
 }
 
 pub fn deinit(self: *Self) void {
     self.tree.deinit();
 }
 
-pub fn encode(source: []const u8, output: []u8) ![]u8 {
-    var buf = std.io.fixedBufferStream(output);
+// slice with return value; TOD0
+pub fn encode(source: []const u8, buf: anytype) !usize {
+    //var buf = std.io.fixedBufferStream(output);
     var byteoffset: u8 = 0;
     var acc: u32 = 0;
     var idx: usize = 0;
@@ -32,11 +33,11 @@ pub fn encode(source: []const u8, output: []u8) ![]u8 {
         const rem: u8 = @intCast(32 - byteoffset);
         //std.debug.print("{} {} {} {}\n", .{buf.pos, output.len, source.len, i});
         if (rem == 0) {
-            try buf.writer().writeInt(u32, acc, .big);
+            try buf.writeInt(u32, acc, .big);
         } else if (rem == codelen) {
             acc <<= @intCast(codelen);
             acc |= codeseq;
-            try buf.writer().writeInt(u32, acc, .big);
+            try buf.writeInt(u32, acc, .big);
             idx += 4;
             byteoffset = 0;
             acc = 0;
@@ -47,7 +48,7 @@ pub fn encode(source: []const u8, output: []u8) ![]u8 {
         } else if (rem < codelen) {
             acc <<= @intCast(rem);
             acc |= (codeseq >> @intCast(codelen - rem));
-            try buf.writer().writeInt(u32, acc, .big);
+            try buf.writeInt(u32, acc, .big);
             idx += 4;
             acc = codeseq & (math.pow(u32, 2, codelen - rem) - 1);
             byteoffset = codelen - rem;
@@ -56,10 +57,17 @@ pub fn encode(source: []const u8, output: []u8) ![]u8 {
     if (byteoffset != 0) {
         const f: u32 = 0xffffffff;
         acc <<= @intCast(32 - byteoffset);
-        try buf.writer().writeInt(u32, (f >> @intCast(byteoffset)) | acc, .big);
-        idx += std.mem.alignForward(u64, byteoffset, 8) / 8;
+        acc = (f >> @intCast(byteoffset)) | acc;
+        const bytes = std.mem.asBytes(&acc);
+        const k = std.mem.alignForward(u64, byteoffset, 8) / 8;
+        var n:usize = 4;
+        for(0..k) |_|{
+            try buf.writeInt(u8, bytes[n-1], .big);
+            n -= 1;
+        }
+        idx += k;
     }
-    return output[0..idx];
+    return idx;
 }
 
 const Node = struct {
@@ -134,7 +142,7 @@ const Node = struct {
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
-pub fn decode(self: *Self, input: []const u8, output: []u8) []u8 {
+pub fn decode(self: *Self, input: []const u8, output: anytype) !usize {
     var outidx: usize = 0;
     var t = self.tree;
     var bitlen: i32 = 0;
@@ -143,8 +151,9 @@ pub fn decode(self: *Self, input: []const u8, output: []u8) []u8 {
         for (0..8) |_| {
             t = t.getBranch(value >> 7);
             if (t.isLeaf()) {
-                if(t.symbol == hcodes[256]) @panic("EOS has been detected!!! call 911");
-                output[outidx] = @truncate(t.symbol);
+                if (t.symbol == hcodes[256]) @panic("EOS has been detected!!! call 911");
+                //output[outidx] = @truncate(t.symbol);
+                try output.writeInt(u8, @truncate(t.symbol), .little);
                 bitlen += t.bits;
                 t = self.tree;
                 outidx += 1;
@@ -152,26 +161,34 @@ pub fn decode(self: *Self, input: []const u8, output: []u8) []u8 {
             value <<= 1;
         }
     }
-    return output[0..outidx];
+    return outidx;
+    //return output[0..outidx];
 }
 
 //var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
-pub fn encodeInt(value: u64, n: u4, buf: []u8) ![]u8 {
+pub fn encodeInt(value: u64, n: u4, stream: anytype) !usize {
     std.debug.assert(n > 0);
-    var stream = std.io.fixedBufferStream(buf);
+    var pos:usize = 0;
+    //var stream = std.io.fixedBufferStream(buf);
     var v = value;
     const max_int = math.pow(usize, 2, n);
     if (value < max_int - 1) {
-        try stream.writer().writeInt(u8, @intCast(value), .little);
+        try stream.writeInt(u8, @intCast(value), .little);
+        pos += 1;
     } else {
-        try stream.writer().writeInt(u8, @intCast(max_int - 1), .little);
+        try stream.writeInt(u8, @intCast(max_int - 1), .little);
+        pos += 1;
         v = v - (max_int - 1);
-        while (v >= 128) : (v /= 128)
-            try stream.writer().writeInt(u8, @intCast(v % 128 + 128), .little);
-        try stream.writer().writeInt(u8, @intCast(v), .little);
+        while (v >= 128) : (v /= 128){
+            try stream.writeInt(u8, @intCast(v % 128 + 128), .little);
+            pos += 1;
+        }
+        try stream.writeInt(u8, @intCast(v), .little);
+        pos += 1;
     }
-    return stream.buffer[0..stream.pos];
+    return pos;
+    //return stream.buffer[0..stream.pos];
 }
 
 pub fn decodeInt(value: []const u8, n: u4, end: *usize) u64 {
@@ -190,49 +207,48 @@ pub fn decodeInt(value: []const u8, n: u4, end: *usize) u64 {
     return result;
 }
 
-pub fn encodeBareString(string: []const u8, output: []u8) ![]u8 {
-    output[0] = 0;
-    var stream = std.io.fixedBufferStream(output);
-    const a = try encodeInt(string.len, 7, output);
-    stream.pos = a.len;
-    try stream.writer().writeAll(string);
-    return stream.buffer[0..stream.pos];
-}
+// pub fn encodeString(string: []const u8, stream: anytype) !usize {
+//     //output[0] = 0;
+//     //var stream = std.io.fixedBufferStream(output);
+//     //stream.writeInt(u8, 0, .little);
+//     //stream.seekBy(-1);
+//     //const pos:usize = stream.pos;
+//     const n = try encodeInt(string.len, 7, stream);
+//     try stream.writer().writeAll(string);
+//     return n + string.len;
+// }
 
-pub fn decodePlainString(source: []const u8, output: []u8) ![]u8 {
-    var stream = std.io.fixedBufferStream(output);
+pub fn decodePlainString(source: []const u8, stream: anytype) !usize {
+    //var stream = std.io.fixedBufferStream(output);
+    //const pos:usize = stream.pos;
     if (source[0] & 128 > 0) {
         std.debug.panic("Huffamn encoded\n", .{});
-    } else {
-        var end: usize = 0;
-        const len = decodeInt(source, 7, &end);
-        try stream.writer().writeAll(source[end .. len + 1]);
     }
-    return output[0..stream.pos];
+    var end: usize = 0;
+    const len = decodeInt(source, 7, &end);
+    const slice = source[end .. len + 1];
+    try stream.writer().writeAll();
+    return slice.len;
 }
 
-pub fn encodeHuffmanString(string: []const u8, output: []u8) ![]u8 {
-    var stream = std.io.fixedBufferStream(output);
-    const buf = try gpa.allocator().alloc(u8, string.len);
-    defer gpa.allocator().free(buf);
-    const hufstr = try encode(string, buf);
-    const a = try encodeInt(hufstr.len, 7, output);
-    stream.pos = a.len;
-    try stream.writer().writeAll(hufstr);
-    output[0] |= 128;
-    return stream.buffer[0..stream.pos];
-}
+// pub fn encodeHuffmanString(string: []const u8, stream: anytype) !usize {
+//     //const pos:usize = stream.pos;
+//     return
+//     try encodeInt(calcEncodedLength(string), 7, stream) +
+//     try encode(string, stream);
+//     //return stream.pos-pos;
+// }
 
-pub fn decodeHuffmanString(ctx: *Self, source: []const u8, output: []u8) []u8 {
+pub fn decodeHuffmanString(ctx: *Self, source: []const u8, stream:anytype) usize {
     if (source[0] & 128 == 0)
         std.debug.panic("Plain string detected\n", .{});
     var end: usize = 0;
     const len = decodeInt(source, 7, &end);
-    return ctx.decode(source[end .. len + 1], output);
+    return ctx.decode(source[end .. len + 1], stream);
 }
 
-pub fn decodeString(ctx: *Self, source: []const u8, output: []u8) ![]u8 {
-    if(source[0] & 128 == 0) 
+pub fn decodeString(ctx: *Self, source: []const u8, output: anytype) !usize {
+    if (source[0] & 128 == 0)
         return try decodePlainString(source, output);
     return ctx.decodeHuffmanString(source, output);
 }
@@ -275,13 +291,45 @@ test "enc dec" {
     var enc = [_]u8{0} ** 1000;
     var dec = [_]u8{0} ** 1000;
 
+    var encstream = std.io.fixedBufferStream(enc[0..]);
+    var decstream = std.io.fixedBufferStream(dec[0..]);
+
+
     for (bufs[0..]) |buf| {
-        const out = try encode(buf[0..], enc[0..]);
-        const out2 = decode(&ctx, out, dec[0..]);
-        try std.testing.expectEqual(buf.len, out2.len);
-        try std.testing.expect(buf.len == out2.len);
-        try std.testing.expectEqualSlices(u8, buf[0..], out2);
+        defer{
+            encstream.reset();
+            decstream.reset();
+        }
+        const l = calcEncodedLength(buf[0..]);
+        const out = try encode(buf[0..], encstream.writer());
+        const out2 = try decode(&ctx, enc[0..out], decstream.writer());
+        try std.testing.expectEqual(buf.len, out2);
+        try std.testing.expectEqual(out, l);
+        try std.testing.expectEqualSlices(u8, buf[0..], dec[0..out2]);
+        
     }
+}
+
+pub fn calcEncodedLength(source:[]const u8) usize {
+    var byteoffset: u8 = 0;
+    var idx: usize = 0;
+    for (source) |value| {
+        const codelen = codes.huffman_code_lengths[value];
+        const rem: u8 = @intCast(32 - byteoffset);
+        if (rem == codelen) {
+            idx += 4;
+            byteoffset = 0;
+        } else if (rem > codelen) {
+            byteoffset += codelen;
+        } else if (rem < codelen) {
+            idx += 4;
+            byteoffset = codelen - rem;
+        }
+    }
+    if (byteoffset != 0) {
+        idx += std.mem.alignForward(u64, byteoffset, 8) / 8;
+    }
+    return idx;
 }
 
 test "leaf ones" {
@@ -299,20 +347,27 @@ test "leaf ones" {
 
 test "inteja" {
     var buf = [_]u8{0} ** 8;
+    var stream = std.io.fixedBufferStream(buf[0..]);
+    
+    var int:usize = 0;
 
-    var a = try encodeInt(500, 3, buf[0..]);
-    var out = decodeInt(a, 3);
+    var a = try encodeInt(500, 3, stream.writer());
+    var out = decodeInt(buf[0..a], 3, &int);
     try std.testing.expect(out == 500);
+    stream.reset();
 
-    a = try encodeInt(500, 1, buf[0..]);
-    out = decodeInt(a, 1);
+    a = try encodeInt(500, 1, stream.writer());
+    out = decodeInt(buf[0..a], 1,&int);
     try std.testing.expect(out == 500);
+    stream.reset();
 
-    a = try encodeInt(500, 8, buf[0..]);
-    out = decodeInt(a, 8);
+    a = try encodeInt(500, 8, stream.writer());
+    out = decodeInt(buf[0..a], 8,&int);
     try std.testing.expect(out == 500);
+    stream.reset();
 
-    a = try encodeInt(50000000000, 8, buf[0..]);
-    out = decodeInt(a, 8);
+    a = try encodeInt(50000000000, 8, stream.writer());
+    out = decodeInt(buf[0..a], 8, &int);
     try std.testing.expect(out == 50000000000);
+    stream.reset();
 }
