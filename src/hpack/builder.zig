@@ -16,11 +16,14 @@ buf: std.io.FixedBufferStream([]u8),
 //std.ArrayList(u8),
 ctx: *t,
 
+header_list_len: u24 = 0,
+
 pub fn init(ctx: *t, buf: []u8) Self {
     return Self{ .buf = std.io.fixedBufferStream(buf), .ctx = ctx };
 }
 
 pub fn add(self: *Self, header: stable.HeaderField, index: bool, never_index: bool) !void {
+    self.header_list_len += @intCast(header.size());
     if (self.ctx.get(header)) |idx| {
         const pos = self.buf.pos;
         _ = try codec.encodeInt(idx, 7, self.buf.writer());
@@ -106,6 +109,10 @@ pub fn addCompress(self: *Self, header: stable.HeaderField, index: bool, never_i
         self.buf.buffer[pos] |= 128;
     }
 }
+
+pub fn addSlice(self: *Self, headers: []stable.HeaderField) !void {
+    for (headers) |value| try self.add(value, false, false);
+} 
 
 pub fn final(self: *Self) []const u8 {
     return self.buf.buffer[0..self.buf.pos];
