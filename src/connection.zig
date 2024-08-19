@@ -10,7 +10,7 @@ streams: std.AutoHashMap(u31, Stream),
 settings: frames.Settings = .{},
 stream: std.net.Stream,
 allocator: Allocator,
-streamidx: usize = 0,
+streamoffset: u31 = 0,
 
 parse_buff: [4096]u8 = [_]u8{0} ** 4096,
 build_buff: [4096]u8 = [_]u8{0} ** 4096,
@@ -24,7 +24,20 @@ contype: Type,
 pending_pongs: std.AutoArrayHashMap([8]u8, void),
 pending_settings: usize = 0,
 closing: bool = false,
+
+pingcb:?*const PingCallBack = null,
+streamcb: ?*const StreamCallBack = null,
+settingscb: ?*const SettingsCallBack = null,
+goawaycb: ?*const GoAwayCallBack = null,
+ppcb: ?*const PushPromiseCallBack = null,
 //std.ArrayList(frames.Ping.Ping),
+
+pub const StreamCallBack = fn (*Stream) void;
+pub const PingCallBack = fn (*Self, payload: [8]u8) void;
+pub const SettingsCallBack = fn (*Self, frames.Settings) void;
+pub const GoAwayCallBack = fn (*Self, frames.GoAway.PayLoad) void;
+pub const PushPromiseCallBack = fn (*Stream, []hpack.HeaderField) void;
+
 
 pub const Type = enum { server, client };
 
@@ -32,12 +45,19 @@ const Self = @This();
 
 pub fn init(allocator: Allocator, stream: std.net.Stream, contype: Type) !Self {
     var self: Self = undefined;
+    self.pingcb = null;
+    self.streamcb = null;
+    self.settingscb = null;
+    self.goawaycb = null;
+    self.ppcb = null;
     self.contype = contype;
     self.settings = .{};
     self.pending_pongs = std.AutoArrayHashMap([8]u8, void).init(allocator);
 
     // waiting for one ack
     self.pending_settings = 1;
+    self.stream = stream;
+    self.streams = std.AutoHashMap(u31, Stream).init(allocator);
 
     if (self.contype == .server) {
         const n = try stream.reader().readAll(self.recv_buff[0..24]);
@@ -45,24 +65,45 @@ pub fn init(allocator: Allocator, stream: std.net.Stream, contype: Type) !Self {
         std.debug.assert(std.mem.eql(u8, self.recv_buff[0..n], "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"));
         try self.settings.write(stream.writer(), false);
     } else {
-        self.settings.enable_push = 0;
+        self.settings.enable_push = 1;
         try self.stream.writer().writeAll("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
         try self.settings.write(stream.writer(), false);
         const head = try frames.Head.read(stream.reader());
         std.debug.assert(head.ty == .settings and !head.flags.ack);
         self.settings = try frames.Settings.read(stream.reader(), self.settings, head.len);
         try frames.Settings.writeAck(stream.writer());
+        try self.openStream(1);
     }
 
-    self.stream = stream;
-    self.streams = std.AutoHashMap(u31, Stream).init(allocator);
+    self.streamoffset = 0;
+
     self.allocator = allocator;
 
-    self.ctx = try hpack.Tables.init(allocator);
+    self.ctx = try hpack.Tables.init(allocator, self.settings.header_table_size);
     self.parser = hpack.Parser.init(&self.ctx, self.parse_buff[0..]);
     self.builder = hpack.Builder.init(&self.ctx, self.build_buff[0..]);
 
     return self;
+}
+
+pub fn onStream(self: *Self, cb: *const StreamCallBack) void {
+    self.streamcb = cb;
+}
+
+pub fn onPing(self: *Self, cb: *const PingCallBack) void {
+    self.pingcb = cb;
+}
+
+pub fn onSettings(self: *Self, cb: *const SettingsCallBack) void {
+    self.settingscb = cb;
+}
+
+pub fn onGoAway(self: *Self, cb: *const GoAwayCallBack) void {
+    self.goawaycb = cb;
+}
+
+pub fn onPushPromise(self: *Self, cb: *const PushPromiseCallBack) void {
+    self.ppcb = cb;
 }
 
 pub fn openStream(self: *Self, id: u31) !void {
@@ -76,25 +117,19 @@ pub fn openStream(self: *Self, id: u31) !void {
 }
 
 pub fn processFrames(self: *Self) !void {
-    //std.debug.print("********************\n", .{});
-    //try self.ping([_]u8{1,2,3,4,5,6,7,8});
-
-
     while (true) {
         const head = try frames.Head.read(self.stream.reader());
-    std.debug.print("NEW FRAME: {}\n", .{head.ty});
+    //std.debug.print("NEW FRAME: {any}\n", .{head.ty});
 
         switch (head.ty) {
             .goaway => {
                 const payload = try frames.GoAway.read(self.stream.reader(), head);
-                std.debug.print("GOAWAY code: {} lastid: {}\n", .{payload.code, payload.last_id});
-                //try frames.GoAway.write(self.stream.writer(), .{ .code = .no_error, .last_id = @truncate(head.streamid) });
+                if(self.goawaycb) |cb| cb(self, payload);
                 break;
             },
             .headers => {
-
                 const affected_stream = if (self.streams.getPtr(head.streamid)) |stream| blk: {
-                    if (stream.state != .open) @panic("Invalid state to receive headers");
+                    if(!stream.opening()) @panic("Invalid state to receive headers");
                     break :blk stream;
                 } else blk: {
                     try self.openStream(head.streamid);
@@ -104,63 +139,41 @@ pub fn processFrames(self: *Self) !void {
                 var headerbuff = [_]hpack.HeaderField{.{}} ** 100;
                 var hproc = frames.Headers{ .builder = &self.builder, .parser = &self.parser };
                 const headers = try hproc.readAndParse(self.stream.reader(), head, headerbuff[0..]);
-
-                if (head.flags.ack) {
-                    affected_stream.transition(.recveos);
-                    std.debug.print("END OF STREAM HEADERS: {}\n", .{head});
-                }
-
-                for (headers) |value| {
-                    std.debug.print("{s}: {s}\n", .{ value.name, value.value });
-                }
-
-                var reply = [_]hpack.HeaderField{
-                    .{.name = ":status", .value = "200"},
-                    .{.name = "content-type", .value = "text-plain" }
-                };
-
-                //try affected_stream.ok(false);
-                try affected_stream.sendHeaders(reply[0..], false);
-                try affected_stream.write("i wonder but kalao", "hello world", true);
-
-                //try hproc.write(self.stream.writer(), 10000, reply[0..], head.streamid, false);
-                //try self.goAway(1, .protocol_error, "Tumekanjo");
-
+                if (head.flags.ack) affected_stream.transition(.recveos);
+                if(self.streamcb) |cb| cb(affected_stream);
+                if(affected_stream.headerscb) |cb| cb(headers, affected_stream);
                 if (affected_stream.closing()) break;
             },
             .settings => {
-                std.debug.print("SETTINGS {}\n", .{head.len});
                 if (head.streamid != 0) @panic("SETTING: stream id not 0");
-                if (!head.flags.ack) {
-                    self.settings = try frames.Settings.read(self.stream.reader(), self.settings, head.len);
-                    std.debug.print("writing ack...\n", .{});
-                    try frames.Settings.writeAck(self.stream.writer());
-                } else {
-                    std.debug.assert(head.len == 0);
+                if (head.flags.ack) {                    std.debug.assert(head.len == 0);
                     if(self.pending_settings > 0) self.pending_settings -= 1;
-                    std.debug.print("received ack...\n", .{});
+                    //std.debug.print("received ack...\n", .{});
+                } else {
+                    self.settings = try frames.Settings.read(self.stream.reader(), self.settings, head.len);
+                    if(self.settingscb) |cb| cb(self, self.settings);
                 }
-                //if(self.closing) break;
             },
             .ping => {
                 var payload = try frames.Ping.read(self.stream.reader(), head);
-                if (!head.flags.ack) try frames.Ping.pong(self.stream.writer(), payload);
-
                 if(head.flags.ack) {
                     if(!self.pending_pongs.orderedRemove(payload)) {
                         std.debug.panic("invalid pong: {s}\n", .{&payload});
                     }
+                } else {
+                    if(self.pingcb) |cb| cb(self, payload) else
+                    try frames.Ping.pong(self.stream.writer(), payload);
                 }
-                std.debug.print("payload: {any}\n", .{std.mem.asBytes(&payload).*});
-
-                //if(self.closing) break;
             },
             .rst => {
                 const affected_stream = self.streams.getPtr(head.streamid);
                 const rst = try frames.Rst.read(self.stream.reader());
                 
-                std.debug.print("RST: code: {} ...\n", .{rst.code});
+                //std.debug.print("RST: code: {} ...\n", .{rst.code});
                 if (affected_stream) |s| {
+
+                    if(s.rstcb) |cb| cb(s, rst.code);
+
                     if(s.state != .idle) {
                         s.transition(.recvrst);
                         self.pending_pongs.clearAndFree();
@@ -171,31 +184,28 @@ pub fn processFrames(self: *Self) !void {
                 break;
             },
             .data => {  
-                var buf = [_]u8{0} ** 256;
-                std.debug.print("Data: reciving: {}\n", .{head});
-                //var stream = std.io.fixedBufferStream(buf[0..]);
-                //try frames.Data.read(self.stream.reader(), stream.writer(), head);
-
+                //std.debug.print("Data: reciving: {}\n", .{head});
                 const affected_stream = self.streams.getPtr(head.streamid) orelse @panic("DATA: stream not found");
-
                 try affected_stream.setReadable(head);
-                var n = try affected_stream.read(buf[0..]);
-
-                while (n > 0) {
-                    n = try affected_stream.read(buf[0..]);
-                std.debug.print("Data: {s}, [{}]\n", .{buf[0..n], n});
-                }
-
-
-                //try frames.Data.writeEmpty(self.stream.writer(), head.streamid);
-
-
+                if(affected_stream.datacb) |cb| cb(affected_stream, head);
+                std.debug.assert(affected_stream.datastate == .idle);
                 if(affected_stream.closing()) break;
             },
             .priority => {
                 try self.stream.reader().skipBytes(head.len, .{});
             },
-            .continuation, .pushpromise, .windowupdate => |f| std.debug.panic("UNHANDLED: {}\n", .{f}),
+            .pushpromise => {
+                std.debug.print("PP len: {}\n", .{head.len});
+                var pproc = frames.PushPromise{.builder = &self.builder, .parser = &self.parser};
+                var headerbuff = [_]hpack.HeaderField{.{}} ** 100;
+                const promise = try pproc.readAndParse(self.stream.reader(), head, headerbuff[0..]);
+                try self.openStream(promise.streamId);
+                const stream = self.streams.getPtr(promise.streamId).?;
+                if(self.ppcb) |cb| cb(stream, promise.headers);
+                //for(promise.headers) |h| h.display();
+            },
+            .windowupdate => |f| std.debug.panic("UNHANDLED: {}\n", .{f}),
+            .continuation => unreachable
         }
 
         if(self.closing) break;
@@ -214,7 +224,7 @@ pub fn pong(self: *Self, payload: [8]u8) !void {
 pub fn close(self: *Self) !void {
     self.closing = true;
     while(self.pending_pongs.count() != 0 or self.pending_settings != 0){
-        std.debug.print("Finishing: --- [p:{},s:{}]\n", .{self.pending_pongs.count(), self.pending_settings});
+        //std.debug.print("Finishing: --- [p:{},s:{}]\n", .{self.pending_pongs.count(), self.pending_settings});
         try self.processFrames();
     }
     self.stream.close();
@@ -235,3 +245,29 @@ pub fn goAway(self: *Self, last_processed_id: u31, code: errcodes.Code, debug_in
 pub fn updateWindow(self: *Self, increment: u31) void {
     try frames.WindowUpdate.write(self.stream.writer(), 0, increment);
 }
+
+pub fn acceptSettings(self: *Self) !void {
+    try frames.Settings.writeAck(self.stream.writer());
+}
+
+pub fn resizeDynamicTable(self: *Self) void {
+    self.ctx.dynamic_table.resize(self.settings.header_table_size);
+}
+
+pub fn request(self: *Self, headers: []hpack.HeaderField) !*Stream {
+    std.debug.assert(self.contype == .client);
+
+    if(self.streamoffset == 0) {
+        self.streamoffset = 1;
+    } else {
+        self.streamoffset += 2;
+    }
+    try self.openStream(self.streamoffset);
+    var s = self.streams.getPtr(self.streamoffset).?;
+    try s.sendHeaders(headers[0..], true);
+    //std.debug.print("STATE: {}\n", .{s.state});
+    //s.transition(.sendheaders);
+    return s;
+}
+
+

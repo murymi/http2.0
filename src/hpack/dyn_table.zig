@@ -5,6 +5,7 @@ const HeaderField = static.HeaderField;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
+set_capcity:usize = 4096,
 capacity: usize = 0,
 max_capacity: usize,
 table: List,
@@ -12,7 +13,7 @@ table: List,
 const Self = @This();
 
 pub fn init(allocator: std.mem.Allocator, max_capacity: usize) Self {
-    return Self{ .max_capacity = max_capacity, .table = List.init(allocator) };
+    return Self{ .max_capacity = max_capacity, .table = List.init(allocator), .set_capcity = max_capacity };
 }
 
 pub fn deinit(self: *Self) void {

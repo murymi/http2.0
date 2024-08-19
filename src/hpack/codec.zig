@@ -184,8 +184,8 @@ pub fn decodeInt(value: []const u8, n: u4, end: *usize) u64 {
         const b = value[end.*];
         result = result + (b & 127) * math.pow(usize, 2, m);
         m = m + 7;
-        if (b & 128 != 128) break;
         end.* += 1;
+        if (b & 128 != 128) break;
     }
     return result;
 }
@@ -292,8 +292,8 @@ test "leaf ones" {
     }
 }
 
-test "inteja" {
-    var buf = [_]u8{0} ** 8;
+test "integer" {
+    var buf = [_]u8{0} ** 10;
     var stream = std.io.fixedBufferStream(buf[0..]);
 
     var int: usize = 0;
@@ -317,4 +317,19 @@ test "inteja" {
     out = decodeInt(buf[0..a], 8, &int);
     try std.testing.expect(out == 50000000000);
     stream.reset();
+}
+
+test "integer doubt" {
+    var buf = [_]u8{0} ** 10;
+    var stream = std.io.fixedBufferStream(buf[0..]);
+
+    for (1..9) |j| {
+        for (0..1000000) |i| {
+            var int: usize = 0;
+            const a = try encodeInt(i, @truncate(j), stream.writer());
+            const out = decodeInt(buf[0..a], @truncate(j), &int);
+            try std.testing.expectEqual(out, i);
+            stream.reset();
+        }
+    }
 }

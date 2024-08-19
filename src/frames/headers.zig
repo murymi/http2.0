@@ -88,6 +88,7 @@ pub fn readAndParse(
 ) ![]hpack.HeaderField {
     var buf = [_]u8{0} ** 10000;
     const n = try read(instream, buf[0..], head);
+    //std.debug.print("---------> > > n = {}\n", .{n});
     return try self.parser.parse(buf[0..n], out[0..]);
 }
 

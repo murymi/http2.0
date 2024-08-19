@@ -48,8 +48,8 @@ pub const Settings = struct {
 
     pub fn read(stream: anytype, old: Settings, len: usize) !Settings {
         var s = old;
-        if (len % 4 != 0) @panic("invalied setting size");
-        for (0..len / 4) |_| {
+        if (len % 6 != 0) std.debug.panic("invalid setting size: {}", .{len});
+        for (0..len / 6) |_| {
             switch (try stream.readInt(u16, .big)) {
                 0x01 => s.header_table_size = try stream.readInt(u32, .big),
                 0x02 => s.enable_push = (try stream.readInt(u32, .big)),

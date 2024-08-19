@@ -7,6 +7,7 @@ const stable = @import("static_table.zig");
 //const Allocator = std.mem.Allocator;
 const t = @import("tables.zig");
 const builder = @import("builder.zig");
+const Parser = @import("parser.zig");
 
 //var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
@@ -20,9 +21,9 @@ pub fn init(ctx: *t, heap: []u8) @This() {
 
 pub fn parse(self: *@This(), in: []const u8, output: []stable.HeaderField) ![]stable.HeaderField {
     var input = in;
-    //var stream = std.io.fixedBufferStream(self.heap);
     var outidx: usize = 0;
     while (input.len > 0) {
+        var step: bool = true;
         if (input[0] & 128 == 128) {
             //6.1. Indexed Header Field Representation
             const idx = decodeInt(&input, 7);
@@ -38,6 +39,22 @@ pub fn parse(self: *@This(), in: []const u8, output: []stable.HeaderField) ![]st
 
             output[outidx].value = try self.decodeString(&input);
             try self.ctx.dynamic_table.put(output[outidx]);
+        } else if (input[0] & 32 == 32) {
+            step = false;
+            //6.3. Dynamic Table Size Update
+            const new_size = decodeInt(&input, 5);
+            if (new_size <= self.ctx.dynamic_table.set_capcity) {
+                self.ctx.dynamic_table.resize(new_size);
+            } else @panic("too large size");
+        } else if (input[0] & 16 == 16) {
+            //6.2.3. Literal Header Field Never Indexed
+            const idx = decodeInt(&input, 4);
+            if (idx > 0) {
+                if (self.ctx.at(idx - 1)) |h|
+                    output[outidx] = h;// else @panic("greeeat errrooorrr");
+            } else output[outidx].name = try self.decodeString(&input);
+
+            output[outidx].value = try self.decodeString(&input);
         } else if (input[0] & 240 == 0) {
             //6.2.2. Literal Header Field without Indexing
             const idx = decodeInt(&input, 4);
@@ -46,23 +63,9 @@ pub fn parse(self: *@This(), in: []const u8, output: []stable.HeaderField) ![]st
                     output[outidx] = h;
             } else output[outidx].name = try self.decodeString(&input);
             output[outidx].value = try self.decodeString(&input);
-        } else if (input[0] & 16 == 16) {
-            //6.2.3. Literal Header Field Never Indexed
-            const idx = decodeInt(&input, 4);
-            if (idx > 0) {
-                if (self.ctx.at(idx - 1)) |h|
-                    output[outidx] = h;
-            } else output[outidx].name = try self.decodeString(&input);
-            output[outidx].value = try self.decodeString(&input);
-        } else if (input[0] & 32 == 32) {
-            //6.3. Dynamic Table Size Update
-            const new_size = decodeInt(&input, 5);
-            if (new_size <= self.ctx.dynamic_table.max_capacity) {
-                self.ctx.dynamic_table.resize(new_size);
-            } else @panic("too large size");
         }
         //std.debug.print("{s} -> {s}\n", .{output[outidx].name, output[outidx].value});
-        outidx += 1;
+        if(step) outidx += 1;
     }
     return output[0..outidx];
 }
@@ -73,15 +76,11 @@ pub fn decodeString(self: *@This(), input: *[]const u8) ![]const u8 {
     const len = codec.decodeInt(input.*, 7, &end);
     input.* = input.*[end..];
     const pos = self.heap.pos;
-    if (compressed) {
-        _ = try self.ctx.codec.decode(input.*[0..len], self.heap.writer());
-        input.* = input.*[len..];
-        return self.heap.buffer[pos..self.heap.pos];
-    } else {
-        const slice = input.*[0..len];
-        input.* = input.*[len..];
-        return slice;
-    }
+    if (compressed) 
+    _ = try self.ctx.codec.decode(input.*[0..len], self.heap.writer()) else
+    try self.heap.writer().writeAll(input.*[0..len]);
+    input.* = input.*[len..];
+    return self.heap.buffer[pos..self.heap.pos];
 }
 
 pub fn decodeInt(input: *[]const u8, n: u4) u64 {
@@ -97,7 +96,7 @@ const tst = std.testing;
 
 test "plain" {
     const malloc = gpa.allocator();
-    var ctx = try t.init(malloc);
+    var ctx = try t.init(malloc,256);
     ctx.dynamic_table.max_capacity = 256;
 
     var heap = [_]u8{0} ** 4096;
@@ -141,7 +140,7 @@ test "plain" {
 
 test "compress" {
     const malloc = gpa.allocator();
-    var ctx = try t.init(malloc);
+    var ctx = try t.init(malloc, 256);
     ctx.dynamic_table.max_capacity = 256;
 
     var heap = [_]u8{0} ** 4096;
@@ -170,5 +169,32 @@ test "compress" {
         const out = try p.parse(&.{ 0x88, 0xc1, 0x61, 0x96, 0xd0, 0x7a, 0xbe, 0x94, 0x10, 0x54, 0xd4, 0x44, 0xa8, 0x20, 0x05, 0x95, 0x04, 0x0b, 0x81, 0x66, 0xe0, 0x84, 0xa6, 0x2d, 0x1b, 0xff, 0xc0, 0x5a, 0x83, 0x9b, 0xd9, 0xab, 0x77, 0xad, 0x94, 0xe7, 0x82, 0x1d, 0xd7, 0xf2, 0xe6, 0xc7, 0xb3, 0x35, 0xdf, 0xdf, 0xcd, 0x5b, 0x39, 0x60, 0xd5, 0xaf, 0x27, 0x08, 0x7f, 0x36, 0x72, 0xc1, 0xab, 0x27, 0x0f, 0xb5, 0x29, 0x1f, 0x95, 0x87, 0x31, 0x60, 0x65, 0xc0, 0x03, 0xed, 0x4e, 0xe5, 0xb1, 0x06, 0x3d, 0x50, 0x07 }, headers[0..]);
         for (out, expected) |a, b| try tst.expect(a.eql(b));
         try tst.expectEqual(215, ctx.dynamic_table.capacity);
+    }
+
+    {
+        const expected = [_]stable.HeaderField{ .{ .name = "password", .value = "secret" }};
+        const out = try p.parse(&.{ 0x10, 0x08, 0x70, 0x61, 0x73, 0x73, 0x77, 0x6f, 0x72, 0x64, 0x06, 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 },headers[0..]);
+        for (out, expected) |a, b| try tst.expect(a.eql(b));
+    }
+}
+
+test "table resize" {
+    const malloc = gpa.allocator();
+    var ctx = try t.init(malloc,4096);
+    var heap = [_]u8{0} ** 4096;
+    var buildbuf = [_]u8{0} ** 4096;
+    var p = Parser.init(&ctx, heap[0..]);
+    var b = builder.init(&ctx, buildbuf[0..]);
+    try b.addDynResize(4096);
+    try b.addDynResize(405);
+    try b.addDynResize(789);
+    try b.addDynResize(45);
+    try b.addDynResize(678);
+    var headers = [_]stable.HeaderField{.{}} ** 50;
+
+    {
+        const out = try p.parse(b.final(), headers[0..]);
+        try tst.expectEqual(out.len, 0);
+        try tst.expectEqual(678, ctx.dynamic_table.max_capacity);
     }
 }
