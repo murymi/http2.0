@@ -112,13 +112,13 @@ pub fn addCompress(self: *Self, header: stable.HeaderField, index: bool, never_i
 
 pub fn addDynResize(self: *Self, size: usize) !void {
     const pos = self.buf.pos;
-    _  = try codec.encodeInt(size, 5, self.buf.writer());
+    _ = try codec.encodeInt(size, 5, self.buf.writer());
     self.buf.buffer[pos] |= 32;
 }
 
 pub fn addSlice(self: *Self, headers: []stable.HeaderField) !void {
     for (headers) |value| try self.add(value, false, false);
-} 
+}
 
 pub fn final(self: *Self) []const u8 {
     return self.buf.buffer[0..self.buf.pos];
@@ -135,7 +135,7 @@ pub fn deinit(_: *Self) void {
 
 test "plain" {
     const malloc = std.testing.allocator;
-    var ctx = try t.init(malloc,4096);
+    var ctx = try t.init(malloc, 4096);
     defer ctx.deinit();
     var header_buf = [_]u8{0} ** 4096;
     var b = @This().init(&ctx, header_buf[0..]);

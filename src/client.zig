@@ -13,7 +13,6 @@ const Headers = frames.Headers;
 const Head = frames.Head;
 const Code = @import("errors.zig").Code;
 
-
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
 //var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -49,7 +48,7 @@ pub fn main() !void {
             var buf = [_]u8{0} ** 512;
             var n = strm.read(buf[0..]) catch |e| @panic(@errorName(e));
 
-                std.debug.print("Data: {s}\n", .{ buf[0..n]});
+            std.debug.print("Data: {s}\n", .{buf[0..n]});
             while (n > 0) {
                 n = strm.read(buf[0..]) catch @panic("err reading");
             }

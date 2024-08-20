@@ -31,7 +31,7 @@ pub const Settings = struct {
     pub fn write(self: *Settings, stream: anytype, ack: bool) !void {
         var header = Head{
             .flags = .{ .ack = ack },
-            .len = if(!ack) 6 * 6 else 0,
+            .len = if (!ack) 6 * 6 else 0,
             .streamid = 0,
             .ty = .settings,
         };

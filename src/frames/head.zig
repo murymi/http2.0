@@ -2,7 +2,7 @@ const std = @import("std");
 pub const hpack = @import("../hpack.zig");
 
 pub const preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
-pub const idmask:u32 = (1 << 31);
+pub const idmask: u32 = (1 << 31);
 
 // le 1 1 1 1 0 0 0
 // be 0 0 0 1 1 1 1
@@ -20,7 +20,7 @@ pub const Head = struct {
         continuation = 0x09,
     };
 
-    pub const Flags = packed struct(u8) { 
+    pub const Flags = packed struct(u8) {
         // ack or end of stream
         ack: bool = false,
         @"6": bool = false,
@@ -46,16 +46,11 @@ pub const Head = struct {
 
     pub fn read(stream: anytype) !Head {
         var len = try stream.readInt(u32, .big);
-        const ty:u8 = @intCast(len & 0xff);
+        const ty: u8 = @intCast(len & 0xff);
         len >>= 8;
         const f = try stream.readInt(u8, .big);
         const id = try stream.readInt(u32, .big);
-        return Head{
-            .len = @truncate(len),
-            .ty = @enumFromInt(ty),
-            .flags = @bitCast(f),
-            .streamid = @truncate(id & ~idmask)
-        };
+        return Head{ .len = @truncate(len), .ty = @enumFromInt(ty), .flags = @bitCast(f), .streamid = @truncate(id & ~idmask) };
     }
 
     pub fn write(self: *Head, stream: anytype) !void {
@@ -75,11 +70,10 @@ pub fn main() !void {
 
     var ctx = try hpack.Tables.init(gpa.allocator());
 
-
     var p = hpack.Parser.init(&ctx, buf[0..]);
     //builder.add(.{ .name = "path"}, false, false);
 
-//_ = p;
+    //_ = p;
     //var b = std.io.fixedBufferStream(buf[0..]);
     //b.writer().st
 
@@ -94,19 +88,14 @@ pub fn main() !void {
     //try h.write(b.writer());
 
     //std.debug.print("{any}\n", .{buf});
-//============
+    //============
     const address = try std.net.Address.parseIp4("127.0.0.1", 3000);
-    var server = try address.listen(.{.reuse_address = true, .reuse_port = true});
+    var server = try address.listen(.{ .reuse_address = true, .reuse_port = true });
     var con = try server.accept();
     var recvbuf = [_]u8{0} ** 4096;
     const n = try con.stream.reader().readAll(recvbuf[0..24]);
     std.debug.assert(n == preface.len);
-    var settings_ack = Head{
-        .flags = .{.ack = true },
-        .ty = .settings,
-        .streamid = 0,
-        .len = 0
-    }; 
+    var settings_ack = Head{ .flags = .{ .ack = true }, .ty = .settings, .streamid = 0, .len = 0 };
     var settings = try Head.read(con.stream.reader());
     //_ = settings;
     std.debug.print("{}\n", .{settings});
@@ -124,45 +113,33 @@ pub fn main() !void {
     const heads = try p.parse(recvbuf[0..hlen], headers[0..]);
 
     for (heads) |value| {
-        std.debug.print("{s}: {s}\n", .{value.name, value.value});
+        std.debug.print("{s}: {s}\n", .{ value.name, value.value });
     }
-
-
 
     const jaba = try Head.read(con.stream.reader());
     std.debug.print("====={}======\n", .{jaba});
 
-
     var builder = hpack.Builder.init(&ctx, buf[0..]);
-        //try builder.add(.{ .name = ":method", .value = "GET"}, false, false);
-        //try builder.add(.{ .name = ":scheme", .value = "http"}, false, false);
-    try builder.add(.{ .name = ":status", .value = "404", }, false, false);
-        //try builder.add(.{ .name = "content-type", .value = "text/plain"}, false, false);
+    //try builder.add(.{ .name = ":method", .value = "GET"}, false, false);
+    //try builder.add(.{ .name = ":scheme", .value = "http"}, false, false);
+    try builder.add(.{
+        .name = ":status",
+        .value = "404",
+    }, false, false);
+    //try builder.add(.{ .name = "content-type", .value = "text/plain"}, false, false);
     const hfin = builder.final();
-    var ddd = Head{
-        .flags = .{.endheaders = true, .ack = true },
-        .ty = .headers,
-        .streamid = 1,
-        .len = @intCast(hfin.len)
-    };
+    var ddd = Head{ .flags = .{ .endheaders = true, .ack = true }, .ty = .headers, .streamid = 1, .len = @intCast(hfin.len) };
     try ddd.write(con.stream.writer());
     try con.stream.writer().writeAll(hfin);
-
-
-
 
     //_ = try con.stream.reader().readInt(u32, .big);
     //const status = try con.stream.reader().readInt(u32, .big);
     //std.debug.print("jaba => {} , {any}\n", .{status, jaba});
 
-
     //const jaba2 = try FrameHeader.read(con.stream.reader());
     //_ = try con.stream.reader().readInt(u32, .big);
     //const status2 = try con.stream.reader().readInt(u32, .big);
     //std.debug.print("jaba2 => {} , {any}\n", .{status2, jaba2});
-
-
-
 
     //try builder.add(.{.name = ":content-type", .value = "text/plain"}, false, false);
 
@@ -190,12 +167,10 @@ pub fn main() !void {
     //p.parse(in: []const u8, output: []stable.HeaderField)
     //try settings.write(con.stream.writer());
     //const ciko = try FrameHeader.read(con.stream.reader());
-//_ = settin;
+    //_ = settin;
 
     //std.debug.print("{}\n", .{settings});
     std.debug.print("{}\n", .{settin});
-
-
 }
 
 //    var b = std.io.fixedBufferStream(buf[0..]);
@@ -212,19 +187,12 @@ pub fn main() !void {
 //    const f = try FrameHeader.read(b.reader());
 //    std.debug.print("{any}\n", .{f});
 
-
 pub fn maitn() !void {
     var buf = [_]u8{0} ** 50;
 
     var b = std.io.fixedBufferStream(buf[0..]);
 
-
-    var  a = Head{
-        .flags = .{.ack = true },
-        .streamid = 45,
-        .len = 7,
-        .ty = .data
-    };
+    var a = Head{ .flags = .{ .ack = true }, .streamid = 45, .len = 7, .ty = .data };
 
     try a.write(b.writer());
     b.pos = 0;

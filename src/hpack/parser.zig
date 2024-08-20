@@ -51,7 +51,7 @@ pub fn parse(self: *@This(), in: []const u8, output: []stable.HeaderField) ![]st
             const idx = decodeInt(&input, 4);
             if (idx > 0) {
                 if (self.ctx.at(idx - 1)) |h|
-                    output[outidx] = h;// else @panic("greeeat errrooorrr");
+                    output[outidx] = h; // else @panic("greeeat errrooorrr");
             } else output[outidx].name = try self.decodeString(&input);
 
             output[outidx].value = try self.decodeString(&input);
@@ -65,7 +65,7 @@ pub fn parse(self: *@This(), in: []const u8, output: []stable.HeaderField) ![]st
             output[outidx].value = try self.decodeString(&input);
         }
         //std.debug.print("{s} -> {s}\n", .{output[outidx].name, output[outidx].value});
-        if(step) outidx += 1;
+        if (step) outidx += 1;
     }
     return output[0..outidx];
 }
@@ -76,9 +76,10 @@ pub fn decodeString(self: *@This(), input: *[]const u8) ![]const u8 {
     const len = codec.decodeInt(input.*, 7, &end);
     input.* = input.*[end..];
     const pos = self.heap.pos;
-    if (compressed) 
-    _ = try self.ctx.codec.decode(input.*[0..len], self.heap.writer()) else
-    try self.heap.writer().writeAll(input.*[0..len]);
+    if (compressed)
+        _ = try self.ctx.codec.decode(input.*[0..len], self.heap.writer())
+    else
+        try self.heap.writer().writeAll(input.*[0..len]);
     input.* = input.*[len..];
     return self.heap.buffer[pos..self.heap.pos];
 }
@@ -96,7 +97,7 @@ const tst = std.testing;
 
 test "plain" {
     const malloc = gpa.allocator();
-    var ctx = try t.init(malloc,256);
+    var ctx = try t.init(malloc, 256);
     ctx.dynamic_table.max_capacity = 256;
 
     var heap = [_]u8{0} ** 4096;
@@ -172,15 +173,15 @@ test "compress" {
     }
 
     {
-        const expected = [_]stable.HeaderField{ .{ .name = "password", .value = "secret" }};
-        const out = try p.parse(&.{ 0x10, 0x08, 0x70, 0x61, 0x73, 0x73, 0x77, 0x6f, 0x72, 0x64, 0x06, 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 },headers[0..]);
+        const expected = [_]stable.HeaderField{.{ .name = "password", .value = "secret" }};
+        const out = try p.parse(&.{ 0x10, 0x08, 0x70, 0x61, 0x73, 0x73, 0x77, 0x6f, 0x72, 0x64, 0x06, 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 }, headers[0..]);
         for (out, expected) |a, b| try tst.expect(a.eql(b));
     }
 }
 
 test "table resize" {
     const malloc = gpa.allocator();
-    var ctx = try t.init(malloc,4096);
+    var ctx = try t.init(malloc, 4096);
     var heap = [_]u8{0} ** 4096;
     var buildbuf = [_]u8{0} ** 4096;
     var p = Parser.init(&ctx, heap[0..]);

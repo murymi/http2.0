@@ -32,12 +32,7 @@ pub fn write(
         self.builder.clear();
         try self.builder.addSlice(headers);
         const hfin = self.builder.final();
-        var header = frame.Head{ 
-            .flags = .{ .endheaders = true },
-            .len = @intCast(hfin.len + 4),
-            .streamid = id,
-            .ty = .pushpromise 
-        };
+        var header = frame.Head{ .flags = .{ .endheaders = true }, .len = @intCast(hfin.len + 4), .streamid = id, .ty = .pushpromise };
         try header.write(stream);
         try stream.writeInt(u32, promiseId, .big);
         try stream.writeAll(hfin);
@@ -48,9 +43,7 @@ pub fn write(
             self.builder.clear();
             try self.builder.addSlice(fitting.a);
             const hfin = self.builder.final();
-            var h = frame.Head{ .flags = .{}, .len = @intCast(
-                if(first_round) hfin.len + 4 else hfin.len
-            ), .streamid = id, .ty = if (first_round) .pushpromise else .continuation };
+            var h = frame.Head{ .flags = .{}, .len = @intCast(if (first_round) hfin.len + 4 else hfin.len), .streamid = id, .ty = if (first_round) .pushpromise else .continuation };
             try h.write(stream);
             if (first_round) try stream.writeInt(u32, promiseId, .big);
             try stream.writeAll(hfin);
@@ -60,9 +53,7 @@ pub fn write(
         self.builder.clear();
         try self.builder.addSlice(fitting.a);
         const hfin = self.builder.final();
-        var finalhead = frame.Head{ .flags = .{ .endheaders = true }, .len = @intCast(
-                if(first_round) hfin.len + 4 else hfin.len
-        ), .streamid = id, .ty = if (first_round) .pushpromise else .continuation };
+        var finalhead = frame.Head{ .flags = .{ .endheaders = true }, .len = @intCast(if (first_round) hfin.len + 4 else hfin.len), .streamid = id, .ty = if (first_round) .pushpromise else .continuation };
         try finalhead.write(stream);
         if (first_round) try stream.writeInt(u32, promiseId, .big);
         try stream.writeAll(hfin);

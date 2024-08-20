@@ -20,8 +20,7 @@ pub fn write(self: *Headers, stream: anytype, max_header_list: u24, headers: []h
         self.builder.clear();
         try self.builder.addSlice(headers);
         const hfin = self.builder.final();
-        var header = frame.Head{ .flags = .{ .endheaders = true, .ack = endstream },
-         .len = @intCast(hfin.len), .streamid = id, .ty = .headers };
+        var header = frame.Head{ .flags = .{ .endheaders = true, .ack = endstream }, .len = @intCast(hfin.len), .streamid = id, .ty = .headers };
         try header.write(stream);
         try stream.writeAll(hfin);
         return;

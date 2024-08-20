@@ -14,10 +14,7 @@ allocator: Allocator,
 codec: codec,
 
 pub fn init(allocator: Allocator, dynamic_capacity: usize) !@This() {
-    return @This(){ 
-        .allocator = allocator, .dynamic_table = dtable.init(allocator, dynamic_capacity),
-        .static_table = try stable.init(allocator), .codec = codec.init() 
-    };
+    return @This(){ .allocator = allocator, .dynamic_table = dtable.init(allocator, dynamic_capacity), .static_table = try stable.init(allocator), .codec = codec.init() };
 }
 
 pub fn get(self: *@This(), header: stable.HeaderField) ?usize {

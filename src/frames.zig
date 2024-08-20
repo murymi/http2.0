@@ -7,6 +7,3 @@ pub const PushPromise = @import("frames/pp.zig");
 pub const GoAway = @import("frames/go.zig");
 pub const Ping = @import("frames/ping.zig");
 pub const WindowUpdate = @import("frames/wupdate.zig");
-
-
-

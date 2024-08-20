@@ -5,7 +5,7 @@ const HeaderField = static.HeaderField;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
-set_capcity:usize = 4096,
+set_capcity: usize = 4096,
 capacity: usize = 0,
 max_capacity: usize,
 table: List,

@@ -5,45 +5,35 @@ const frames = @import("frames.zig");
 const Allocator = std.mem.Allocator;
 const errcodes = @import("errors.zig");
 
-
 streams: std.AutoHashMap(u31, Stream),
 settings: frames.Settings = .{},
-
 peer_settings: frames.Settings = .{},
-
 stream: std.net.Stream,
 allocator: Allocator,
 streamoffset: u31 = 0,
-
 parse_buff: [4096]u8 = [_]u8{0} ** 4096,
 build_buff: [4096]u8 = [_]u8{0} ** 4096,
 recv_buff: [4096]u8 = [_]u8{0} ** 4096,
-
 ctx: hpack.Tables,
 builder: hpack.Builder,
 parser: hpack.Parser,
 contype: Type,
-
 peer_window_size: isize = 0,
-
 pending_pongs: std.AutoHashMap([8]u8, void),
 pending_data: std.AutoHashMap(*Stream, void),
 pending_settings: usize = 0,
 closing: bool = false,
-
-pingcb:?*const PingCallBack = null,
+pingcb: ?*const PingCallBack = null,
 streamcb: ?*const StreamCallBack = null,
 settingscb: ?*const SettingsCallBack = null,
 goawaycb: ?*const GoAwayCallBack = null,
 ppcb: ?*const PushPromiseCallBack = null,
-//std.ArrayList(frames.Ping.Ping),
 
 pub const StreamCallBack = fn (*Stream) void;
 pub const PingCallBack = fn (*Self, payload: [8]u8) void;
 pub const SettingsCallBack = fn (*Self, frames.Settings) void;
 pub const GoAwayCallBack = fn (*Self, frames.GoAway.PayLoad) void;
 pub const PushPromiseCallBack = fn (*Stream, []hpack.HeaderField) void;
-
 
 pub const Type = enum { server, client };
 
@@ -66,7 +56,6 @@ pub fn init(allocator: Allocator, stream: std.net.Stream, contype: Type) !Self {
     self.stream = stream;
     self.streams = std.AutoHashMap(u31, Stream).init(allocator);
     self.pending_data = std.AutoHashMap(*Stream, void).init(allocator);
-
 
     self.settings.initial_window_size = 10;
 
@@ -119,25 +108,32 @@ pub fn onPushPromise(self: *Self, cb: *const PushPromiseCallBack) void {
 }
 
 pub fn openStream(self: *Self, id: u31) !void {
-    var stream = Stream.init(self, id,self.allocator);
+    var stream = Stream.init(self, id, self.allocator);
     stream.state = .open;
     try self.streams.put(id, stream);
 }
 
-pub fn processFrames(self: *Self) !void {
-    while (true) {
-        const head = try frames.Head.read(self.stream.reader());
-    //std.debug.print("NEW FRAME: {any}\n", .{head.ty});
+pub fn shouldClose(self: *Self) bool {
+    if (self.streams.count() == 0) return false;
+    var iter = self.streams.valueIterator();
+    while (iter.next()) |stream| {
+        if (stream.state != .closed) return false;
+    }
+    return true;
+}
 
+pub fn processFrames(self: *Self) !void {
+    while (!self.shouldClose()) {
+        const head = try frames.Head.read(self.stream.reader());
         switch (head.ty) {
             .goaway => {
                 const payload = try frames.GoAway.read(self.stream.reader(), head);
-                if(self.goawaycb) |cb| cb(self, payload);
+                if (self.goawaycb) |cb| cb(self, payload);
                 break;
             },
             .headers => {
                 const affected_stream = if (self.streams.getPtr(head.streamid)) |stream| blk: {
-                    if(!stream.opening()) @panic("Invalid state to receive headers");
+                    if (!stream.opening()) @panic("Invalid state to receive headers");
                     break :blk stream;
                 } else blk: {
                     try self.openStream(head.streamid);
@@ -148,91 +144,81 @@ pub fn processFrames(self: *Self) !void {
                 var hproc = frames.Headers{ .builder = &self.builder, .parser = &self.parser };
                 const headers = try hproc.readAndParse(self.stream.reader(), head, headerbuff[0..]);
                 if (head.flags.ack) affected_stream.transition(.recveos);
-                if(self.streamcb) |cb| cb(affected_stream);
-                if(affected_stream.headerscb) |cb| cb(headers, affected_stream);
+                if (self.streamcb) |cb| cb(affected_stream);
+                if (affected_stream.headerscb) |cb| cb(headers, affected_stream);
                 if (affected_stream.closing()) break;
             },
             .settings => {
                 if (head.streamid != 0) @panic("SETTING: stream id not 0");
-                if (head.flags.ack) {                    std.debug.assert(head.len == 0);
-                    if(self.pending_settings > 0) self.pending_settings -= 1;
-                    //std.debug.print("received ack...\n", .{});
+                if (head.flags.ack) {
+                    std.debug.assert(head.len == 0);
+                    if (self.pending_settings > 0) self.pending_settings -= 1;
                 } else {
                     const settings = try frames.Settings.read(self.stream.reader(), self.peer_settings, head.len);
-                    if(self.settingscb) |cb| cb(self, settings);
+                    if (self.settingscb) |cb| cb(self, settings);
                 }
             },
             .ping => {
                 var payload = try frames.Ping.read(self.stream.reader(), head);
-                if(head.flags.ack) {
-                    if(!self.pending_pongs.remove(payload)) {
+                if (head.flags.ack) {
+                    if (!self.pending_pongs.remove(payload)) {
                         std.debug.panic("invalid pong: {s}\n", .{&payload});
                     }
                 } else {
-                    if(self.pingcb) |cb| cb(self, payload) else
-                    try frames.Ping.pong(self.stream.writer(), payload);
+                    if (self.pingcb) |cb| cb(self, payload) else try frames.Ping.pong(self.stream.writer(), payload);
                 }
             },
             .rst => {
                 const affected_stream = self.streams.getPtr(head.streamid);
                 const rst = try frames.Rst.read(self.stream.reader());
-                
-                //std.debug.print("RST: code: {} ...\n", .{rst.code});
                 if (affected_stream) |s| {
-
-                    if(s.rstcb) |cb| cb(s, rst.code);
-
-                    if(s.state != .idle) {
+                    if (s.rstcb) |cb| cb(s, rst.code);
+                    if (s.state != .idle) {
                         s.transition(.recvrst);
                         self.pending_pongs.clearAndFree();
                         self.pending_settings = 0;
                     } else unreachable;
                 } else @panic("RST: Stream not found");
-
-                break;
             },
-            .data => {  
-                //std.debug.print("Data: reciving: {}\n", .{head});
+            .data => {
                 const affected_stream = self.streams.getPtr(head.streamid) orelse @panic("DATA: stream not found");
                 try affected_stream.setReadable(head);
-                if(affected_stream.datacb) |cb| cb(affected_stream, head);
+                if (affected_stream.datacb) |cb| cb(affected_stream, head);
                 std.debug.assert(affected_stream.datastate == .idle);
-                if(affected_stream.closing()) break;
             },
             .priority => {
                 try self.stream.reader().skipBytes(head.len, .{});
             },
             .pushpromise => {
-                std.debug.print("PP len: {}\n", .{head.len});
-                var pproc = frames.PushPromise{.builder = &self.builder, .parser = &self.parser};
+                var pproc = frames.PushPromise{ .builder = &self.builder, .parser = &self.parser };
                 var headerbuff = [_]hpack.HeaderField{.{}} ** 100;
                 const promise = try pproc.readAndParse(self.stream.reader(), head, headerbuff[0..]);
                 try self.openStream(promise.streamId);
                 const stream = self.streams.getPtr(promise.streamId).?;
-                if(self.ppcb) |cb| cb(stream, promise.headers);
-                //for(promise.headers) |h| h.display();
+                if (self.ppcb) |cb| cb(stream, promise.headers);
             },
             .windowupdate => {
                 const inc = try frames.WindowUpdate.read(self.stream.reader(), head);
-                std.debug.print("INCREMENT: {}, ID: {}\n", .{inc, head.streamid});
-
-                if(head.streamid == 0) self.peer_window_size += @intCast(inc) else {
-                    if(self.streams.getPtr(head.streamid)) |s| {
+                if (head.streamid == 0) self.peer_window_size += @intCast(inc) else {
+                    if (self.streams.getPtr(head.streamid)) |s| {
                         s.peer_window_size += @intCast(inc);
                     }
                 }
-
             },
-            .continuation => unreachable
+            .continuation => unreachable,
         }
 
         var iter = self.pending_data.keyIterator();
-        while(iter.next()) |stream| {
+        while (iter.next()) |stream| {
             try stream.*.writePending();
         }
-        
 
-        if(self.closing) break;
+        if (self.closing) break;
+    }
+
+    var iter = self.pending_data.keyIterator();
+    while (iter.next()) |stream| {
+        try stream.*.writePending();
     }
 }
 
@@ -251,17 +237,10 @@ pub fn flush(self: *Self) !void {
     }
 }
 
-// var iter = self.pending_data.keyIterator();
-// while(iter.next()) |stream| {
-//     try stream.*.writePending();
-// }
-        
-
 pub fn close(self: *Self) !void {
     try self.flush();
     self.closing = true;
-    while(self.pending_pongs.count() != 0 or self.pending_settings != 0){
-        //std.debug.print("Finishing: --- [p:{},s:{}]\n", .{self.pending_pongs.count(), self.pending_settings});
+    while (self.pending_pongs.count() != 0 or self.pending_settings != 0) {
         try self.processFrames();
     }
     self.stream.close();
@@ -269,32 +248,29 @@ pub fn close(self: *Self) !void {
 
 pub fn goAway(self: *Self, last_processed_id: u31, code: errcodes.Code, debug_info: ?[]const u8) !void {
     _ = self.streams.getPtr(last_processed_id) orelse @panic("invalid stream id");
-    if(self.contype == .server) {
-        const payload =[_]u8{'c', 'l', 'o', 's', 'i', 'n', 'g', '!'};
+    if (self.contype == .server) {
+        const payload = [_]u8{ 'c', 'l', 'o', 's', 'i', 'n', 'g', '!' };
         try self.ping(payload);
-        while(self.pending_pongs.get(payload)) |_| try self.processFrames();
+        while (self.pending_pongs.get(payload)) |_| try self.processFrames();
     }
 
-    try frames.GoAway.write(self.stream.writer(), frames.GoAway.PayLoad{.code = code, .debug_info = debug_info, .last_id = last_processed_id});
+    try frames.GoAway.write(self.stream.writer(), frames.GoAway.PayLoad{ .code = code, .debug_info = debug_info, .last_id = last_processed_id });
     self.stream.close();
 }
 
 pub fn updateWindow(self: *Self, increment: u31) !void {
-    //self.peer_window_size += increment;
     try frames.WindowUpdate.write(self.stream.writer(), 0, increment);
 }
 
 pub fn acceptSettings(self: *Self, settings: frames.Settings) !void {
-    if(settings.initial_window_size != self.peer_settings.initial_window_size) {
+    if (settings.initial_window_size != self.peer_settings.initial_window_size) {
         var stream_iter = self.streams.valueIterator();
-        while(stream_iter.next()) |stream| {
+        while (stream_iter.next()) |stream| {
             stream.peer_window_size += settings.initial_window_size - self.peer_settings.initial_window_size;
         }
     }
-
-    if(settings.header_table_size != self.peer_settings.header_table_size) 
+    if (settings.header_table_size != self.peer_settings.header_table_size)
         self.resizeDynamicTable(settings.header_table_size);
-
     self.peer_settings = settings;
     try frames.Settings.writeAck(self.stream.writer());
 }
@@ -305,18 +281,12 @@ pub fn resizeDynamicTable(self: *Self, new_size: u32) void {
 
 pub fn request(self: *Self, headers: []hpack.HeaderField) !*Stream {
     std.debug.assert(self.contype == .client);
-
-    if(self.streamoffset == 0) {
-        self.streamoffset = 1;
-    } else {
+    if (self.streamoffset == 0)
+        self.streamoffset = 1
+    else
         self.streamoffset += 2;
-    }
     try self.openStream(self.streamoffset);
     var s = self.streams.getPtr(self.streamoffset).?;
     try s.sendHeaders(headers[0..], true);
-    //std.debug.print("STATE: {}\n", .{s.state});
-    //s.transition(.sendheaders);
     return s;
 }
-
-

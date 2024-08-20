@@ -4,10 +4,10 @@ const frame = @import("../frames.zig");
 pub fn readAll(in: anytype, out: anytype, head: frame.Head) !void {
     // todo
     var buf = [_]u8{0} ** 512;
-    const paddlen:u8 = if(head.flags.padded) try in.readInt(u8, .big) else 0;
-    var rem:usize = (head.len - paddlen);
+    const paddlen: u8 = if (head.flags.padded) try in.readInt(u8, .big) else 0;
+    var rem: usize = (head.len - paddlen);
 
-    if(head.flags.padded) rem -= 1;
+    if (head.flags.padded) rem -= 1;
 
     while (rem > 0) {
         const n = try in.read(buf[0..@min(buf.len, rem)]);
@@ -17,8 +17,6 @@ pub fn readAll(in: anytype, out: anytype, head: frame.Head) !void {
 
     try in.skipBytes(paddlen, .{});
 }
-
-
 
 pub fn writeStream(in: anytype, out: anytype, head: frame.Head) !void {
     var hd = head;
@@ -34,12 +32,7 @@ pub fn writeStream(in: anytype, out: anytype, head: frame.Head) !void {
 }
 
 pub fn writeEmpty(stream: anytype, id: u31) !void {
-    var hd = frame.Head{
-        .flags = .{.ack = true},
-        .streamid = id,
-        .len = 0,
-        .ty = .data
-    };
+    var hd = frame.Head{ .flags = .{ .ack = true }, .streamid = id, .len = 0, .ty = .data };
     try hd.write(stream);
 }
 
@@ -48,10 +41,10 @@ pub fn write(out: anytype, id: u31, buf: []const u8, padding: []const u8, eos: b
     var hd = frame.Head{
         .ty = .data,
         .len = @truncate(buf.len
-         //+ padding.len
+        //+ padding.len
         ),
         .streamid = id,
-        .flags = .{.ack = eos}
+        .flags = .{ .ack = eos },
     };
     //if(padding.len > 0) hd.flags.padded = true;
     try hd.write(out);
@@ -64,17 +57,12 @@ pub fn main() !void {
     const message = "hello world!!";
     var messagestream = std.io.fixedBufferStream(message);
 
-    const head = frame.Head{
-        .flags = .{},
-        .len = @intCast(message.len),
-        .streamid = 90,
-        .ty = .data
-    };
+    const head = frame.Head{ .flags = .{}, .len = @intCast(message.len), .streamid = 90, .ty = .data };
 
     var buf = [_]u8{0} ** 256;
     var stream = std.io.fixedBufferStream(buf[0..]);
 
-    try write(messagestream.reader(),stream.writer(), head);
+    try write(messagestream.reader(), stream.writer(), head);
 
     stream.pos = 0;
 
@@ -86,5 +74,4 @@ pub fn main() !void {
     try readAll(stream.reader(), recstream.writer(), rechead);
 
     std.debug.print("{s}\n", .{recvbuf});
-
 }

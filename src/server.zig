@@ -28,7 +28,7 @@ pub fn main() !void {
         con.onStream(struct {
             pub fn f(stream: *Stream) void {
 
-                //var pushrequest = [_]hpack.HeaderField{ 
+                //var pushrequest = [_]hpack.HeaderField{
                 //    .{ .name = ":path", .value = "/bow/wow" },
                 //    .{ .name = "content-type", .value = "text-plain" },
                 //    .{.name = ":scheme", .value = "http"},
@@ -44,10 +44,7 @@ pub fn main() !void {
                             h.display();
                         }
 
-                        var reply = [_]hpack.HeaderField{ 
-                            .{ .name = ":status", .value = "200" },
-                            .{ .name = "content-type", .value = "text-plain" } 
-                        };
+                        var reply = [_]hpack.HeaderField{ .{ .name = ":status", .value = "200" }, .{ .name = "content-type", .value = "text-plain" } };
 
                         strm.sendHeaders(reply[0..], false) catch {};
                         strm.write("i wonder but kalao", "hello world", true) catch {};
@@ -62,7 +59,7 @@ pub fn main() !void {
 
                         while (n > 0) {
                             n = strm.read(buf[0..]) catch @panic("err reading");
-                            std.debug.print("Data: {s}, [{}]\n", .{buf[0..n], n});
+                            std.debug.print("Data: {s}, [{}]\n", .{ buf[0..n], n });
                         }
                     }
                 }.cb);

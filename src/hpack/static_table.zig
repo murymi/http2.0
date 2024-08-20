@@ -70,7 +70,7 @@ pub const HeaderField = struct {
     }
 
     pub fn display(self: *const HeaderField) void {
-        std.debug.print("{s}: {s}\n", .{self.name, self.value});
+        std.debug.print("{s}: {s}\n", .{ self.name, self.value });
     }
 };
 
