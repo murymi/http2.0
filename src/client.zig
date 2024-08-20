@@ -1,13 +1,7 @@
 const std = @import("std");
 const hpack = @import("./hpack.zig");
-//const Head = @import("frames/frames.zig").Head;
 const Connection = @import("connection.zig");
 const Stream = @import("stream.zig");
-
-//const Pp = @import("frames/pp.zig");
-
-pub const preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
-
 const frames = @import("frames.zig");
 const Headers = frames.Headers;
 const Head = frames.Head;
@@ -15,15 +9,11 @@ const Code = @import("errors.zig").Code;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
-//var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-
 pub fn main() !void {
     const address = try std.net.Address.parseIp4("127.0.0.1", 3000);
     const st = try std.net.tcpConnectToAddress(address);
-    //_ = try stream.writer().writeAll("hello world");
-
     var con = try Connection.init(gpa.allocator(), st, .client);
-    //_ = con;
+    defer con.close() catch {};
     var reply = [_]hpack.HeaderField{
         .{ .name = ":method", .value = "GET" },
         .{ .name = ":authority", .value = "127.0.0.1:3000" },
