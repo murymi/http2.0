@@ -43,11 +43,11 @@ pub fn main() !void {
     }.cb);
 
     const DataProcesser = struct {
-                pub fn cb(strm: *Stream, head: frames.Head) void {
+        pub fn cb(strm: *Stream, head: frames.Head) void {
             _ = head;
             std.debug.print("DATA...\n", .{});
             var buf = [_]u8{0} ** 512;
-            var n = strm.read(buf[0..]) catch @panic("err reading");
+            var n = strm.read(buf[0..]) catch |e| @panic(@errorName(e));
 
                 std.debug.print("Data: {s}\n", .{ buf[0..n]});
             while (n > 0) {
@@ -87,7 +87,7 @@ pub fn main() !void {
     con.onSettings(struct {
         pub fn f(c: *Connection, settings: frames.Settings) void {
             std.debug.print("SET: {}\n", .{settings});
-            c.acceptSettings() catch {};
+            c.acceptSettings(settings) catch {};
         }
     }.f);
 

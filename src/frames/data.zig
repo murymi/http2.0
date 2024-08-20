@@ -57,7 +57,7 @@ pub fn write(out: anytype, id: u31, buf: []const u8, padding: []const u8, eos: b
     try hd.write(out);
     try out.writeAll(buf);
     //if(padding.len > 0) try out.writeAll(padding);
-    std.debug.print("--------------------------> {any}\n", .{hd});
+    //std.debug.print("--------------------------> {any}\n", .{hd});
 }
 
 pub fn main() !void {

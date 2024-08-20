@@ -8,6 +8,9 @@ const errcodes = @import("errors.zig");
 
 streams: std.AutoHashMap(u31, Stream),
 settings: frames.Settings = .{},
+
+peer_settings: frames.Settings = .{},
+
 stream: std.net.Stream,
 allocator: Allocator,
 streamoffset: u31 = 0,
@@ -21,7 +24,10 @@ builder: hpack.Builder,
 parser: hpack.Parser,
 contype: Type,
 
-pending_pongs: std.AutoArrayHashMap([8]u8, void),
+peer_window_size: isize = 0,
+
+pending_pongs: std.AutoHashMap([8]u8, void),
+pending_data: std.AutoHashMap(*Stream, void),
 pending_settings: usize = 0,
 closing: bool = false,
 
@@ -52,12 +58,17 @@ pub fn init(allocator: Allocator, stream: std.net.Stream, contype: Type) !Self {
     self.ppcb = null;
     self.contype = contype;
     self.settings = .{};
-    self.pending_pongs = std.AutoArrayHashMap([8]u8, void).init(allocator);
+    self.peer_settings = .{};
+    self.pending_pongs = std.AutoHashMap([8]u8, void).init(allocator);
 
     // waiting for one ack
     self.pending_settings = 1;
     self.stream = stream;
     self.streams = std.AutoHashMap(u31, Stream).init(allocator);
+    self.pending_data = std.AutoHashMap(*Stream, void).init(allocator);
+
+
+    self.settings.initial_window_size = 10;
 
     if (self.contype == .server) {
         const n = try stream.reader().readAll(self.recv_buff[0..24]);
@@ -70,7 +81,7 @@ pub fn init(allocator: Allocator, stream: std.net.Stream, contype: Type) !Self {
         try self.settings.write(stream.writer(), false);
         const head = try frames.Head.read(stream.reader());
         std.debug.assert(head.ty == .settings and !head.flags.ack);
-        self.settings = try frames.Settings.read(stream.reader(), self.settings, head.len);
+        self.peer_settings = try frames.Settings.read(stream.reader(), self.settings, head.len);
         try frames.Settings.writeAck(stream.writer());
         try self.openStream(1);
     }
@@ -78,6 +89,7 @@ pub fn init(allocator: Allocator, stream: std.net.Stream, contype: Type) !Self {
     self.streamoffset = 0;
 
     self.allocator = allocator;
+    self.peer_window_size = self.peer_settings.initial_window_size;
 
     self.ctx = try hpack.Tables.init(allocator, self.settings.header_table_size);
     self.parser = hpack.Parser.init(&self.ctx, self.parse_buff[0..]);
@@ -107,12 +119,8 @@ pub fn onPushPromise(self: *Self, cb: *const PushPromiseCallBack) void {
 }
 
 pub fn openStream(self: *Self, id: u31) !void {
-    const stream = Stream{
-        .id = id,
-        .parent = self,
-        //.settings = .{},
-        .state = .open,
-    };
+    var stream = Stream.init(self, id,self.allocator);
+    stream.state = .open;
     try self.streams.put(id, stream);
 }
 
@@ -150,14 +158,14 @@ pub fn processFrames(self: *Self) !void {
                     if(self.pending_settings > 0) self.pending_settings -= 1;
                     //std.debug.print("received ack...\n", .{});
                 } else {
-                    self.settings = try frames.Settings.read(self.stream.reader(), self.settings, head.len);
-                    if(self.settingscb) |cb| cb(self, self.settings);
+                    const settings = try frames.Settings.read(self.stream.reader(), self.peer_settings, head.len);
+                    if(self.settingscb) |cb| cb(self, settings);
                 }
             },
             .ping => {
                 var payload = try frames.Ping.read(self.stream.reader(), head);
                 if(head.flags.ack) {
-                    if(!self.pending_pongs.orderedRemove(payload)) {
+                    if(!self.pending_pongs.remove(payload)) {
                         std.debug.panic("invalid pong: {s}\n", .{&payload});
                     }
                 } else {
@@ -204,9 +212,25 @@ pub fn processFrames(self: *Self) !void {
                 if(self.ppcb) |cb| cb(stream, promise.headers);
                 //for(promise.headers) |h| h.display();
             },
-            .windowupdate => |f| std.debug.panic("UNHANDLED: {}\n", .{f}),
+            .windowupdate => {
+                const inc = try frames.WindowUpdate.read(self.stream.reader(), head);
+                std.debug.print("INCREMENT: {}, ID: {}\n", .{inc, head.streamid});
+
+                if(head.streamid == 0) self.peer_window_size += @intCast(inc) else {
+                    if(self.streams.getPtr(head.streamid)) |s| {
+                        s.peer_window_size += @intCast(inc);
+                    }
+                }
+
+            },
             .continuation => unreachable
         }
+
+        var iter = self.pending_data.keyIterator();
+        while(iter.next()) |stream| {
+            try stream.*.writePending();
+        }
+        
 
         if(self.closing) break;
     }
@@ -221,7 +245,20 @@ pub fn pong(self: *Self, payload: [8]u8) !void {
     try frames.Ping.pong(self.stream.writer(), payload);
 }
 
+pub fn flush(self: *Self) !void {
+    while (self.pending_data.count() > 0) {
+        try self.processFrames();
+    }
+}
+
+// var iter = self.pending_data.keyIterator();
+// while(iter.next()) |stream| {
+//     try stream.*.writePending();
+// }
+        
+
 pub fn close(self: *Self) !void {
+    try self.flush();
     self.closing = true;
     while(self.pending_pongs.count() != 0 or self.pending_settings != 0){
         //std.debug.print("Finishing: --- [p:{},s:{}]\n", .{self.pending_pongs.count(), self.pending_settings});
@@ -242,16 +279,28 @@ pub fn goAway(self: *Self, last_processed_id: u31, code: errcodes.Code, debug_in
     self.stream.close();
 }
 
-pub fn updateWindow(self: *Self, increment: u31) void {
+pub fn updateWindow(self: *Self, increment: u31) !void {
+    //self.peer_window_size += increment;
     try frames.WindowUpdate.write(self.stream.writer(), 0, increment);
 }
 
-pub fn acceptSettings(self: *Self) !void {
+pub fn acceptSettings(self: *Self, settings: frames.Settings) !void {
+    if(settings.initial_window_size != self.peer_settings.initial_window_size) {
+        var stream_iter = self.streams.valueIterator();
+        while(stream_iter.next()) |stream| {
+            stream.peer_window_size += settings.initial_window_size - self.peer_settings.initial_window_size;
+        }
+    }
+
+    if(settings.header_table_size != self.peer_settings.header_table_size) 
+        self.resizeDynamicTable(settings.header_table_size);
+
+    self.peer_settings = settings;
     try frames.Settings.writeAck(self.stream.writer());
 }
 
-pub fn resizeDynamicTable(self: *Self) void {
-    self.ctx.dynamic_table.resize(self.settings.header_table_size);
+pub fn resizeDynamicTable(self: *Self, new_size: u32) void {
+    self.ctx.dynamic_table.resize(new_size);
 }
 
 pub fn request(self: *Self, headers: []hpack.HeaderField) !*Stream {

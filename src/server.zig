@@ -28,15 +28,15 @@ pub fn main() !void {
         con.onStream(struct {
             pub fn f(stream: *Stream) void {
 
-                var pushrequest = [_]hpack.HeaderField{ 
-                    .{ .name = ":path", .value = "/bow/wow" },
-                    .{ .name = "content-type", .value = "text-plain" },
-                    .{.name = ":scheme", .value = "http"},
-                };
-                var promised_stream = stream.pushRequest(pushrequest[0..]) catch @panic("push failed");
-                std.debug.print("====== SENT PUSH ========", .{});
+                //var pushrequest = [_]hpack.HeaderField{ 
+                //    .{ .name = ":path", .value = "/bow/wow" },
+                //    .{ .name = "content-type", .value = "text-plain" },
+                //    .{.name = ":scheme", .value = "http"},
+                //};
+                //var promised_stream = stream.pushRequest(pushrequest[0..]) catch @panic("push failed");
+                //std.debug.print("====== SENT PUSH ========", .{});
 
-                promised_stream.write("Hello from zig push\n", "", true) catch {};
+                //promised_stream.write("Hello from zig push\n", "", true) catch {};
 
                 stream.onHeaders(struct {
                     pub fn cb(headers: []hpack.HeaderField, strm: *Stream) void {
@@ -88,7 +88,7 @@ pub fn main() !void {
         con.onSettings(struct {
             pub fn f(c: *Connection, settings: frames.Settings) void {
                 std.debug.print("SET: {}\n", .{settings});
-                c.acceptSettings() catch {};
+                c.acceptSettings(settings) catch {};
             }
         }.f);
 
